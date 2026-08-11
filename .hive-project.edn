@@ -1,0 +1,6 @@
+{:project-id "bb-build"
+ :parent "hive"
+ :description "lein-new-style scaffolder that instantiates a hive project's build setup (the :build alias, version.edn, release workflow) from templates"
+ :language :clojure
+ :tags ["build" "scaffold" "generator" "babashka" "release" "clojars" "gitea"]
+ :carto {:source-roots ["src" "test"]}}

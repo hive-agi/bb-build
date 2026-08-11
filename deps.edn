@@ -1,0 +1,24 @@
+{:paths ["src" "resources"]
+
+ ;; Mirrors bb.edn so clj tooling (carto, LSP, `clojure -M:test`) resolves the
+ ;; same graph the babashka runtime uses.
+ :deps {org.clojure/clojure {:mvn/version "1.12.1"}
+        babashka/fs {:mvn/version "0.5.32"}
+        babashka/process {:mvn/version "0.6.25"}
+        org.babashka/cli {:mvn/version "0.8.67"}}
+
+ :aliases
+ {:test {:extra-paths ["test"]
+         :extra-deps {org.clojure/test.check {:mvn/version "1.1.1"}
+                      io.github.cognitect-labs/test-runner
+                      {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+         :main-opts ["-m" "cognitect.test-runner"]
+         :exec-fn cognitect.test-runner.api/test}
+
+  :nrepl {:extra-paths ["test"]
+          :extra-deps {org.clojure/test.check {:mvn/version "1.1.1"}
+                       nrepl/nrepl {:mvn/version "1.3.1"}
+                       cider/cider-nrepl {:mvn/version "0.50.2"}}
+          :main-opts ["-m" "nrepl.cmdline"
+                      "--middleware" "[cider.nrepl/cider-middleware]"
+                      "--port" "7934"]}}}

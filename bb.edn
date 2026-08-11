@@ -1,0 +1,11 @@
+{:paths ["src" "resources"]
+ :deps {babashka/fs {:mvn/version "0.5.32"}
+        babashka/process {:mvn/version "0.6.25"}
+        org.babashka/cli {:mvn/version "0.8.67"}}
+ :bbin/bin {bb-build {:main-opts ["-m" "bb-build.cli.main"]}}
+ :tasks
+ {test {:extra-paths ["test"]
+        :extra-deps {org.clojure/test.check {:mvn/version "1.1.1"}
+                     io.github.cognitect-labs/test-runner
+                     {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+        :task (exec 'cognitect.test-runner.api/test)}}}
