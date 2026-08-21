@@ -5,7 +5,7 @@
  :bbin/bin {bb-build {:main-opts ["-m" "bb-build.cli.main"]}}
  :tasks
  {test {:extra-paths ["test"]
-        :extra-deps {org.clojure/test.check {:mvn/version "1.1.1"}
+        :extra-deps {org.clojure/test.check {:mvn/version "1.1.3"}
                      io.github.cognitect-labs/test-runner
                      {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
         :task (exec 'cognitect.test-runner.api/test)}}}
