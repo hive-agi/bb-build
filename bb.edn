@@ -1,7 +1,7 @@
 {:paths ["src" "resources"]
- :deps {babashka/fs {:mvn/version "0.5.32"}
+ :deps {babashka/fs {:mvn/version "0.5.34"}
         babashka/process {:mvn/version "0.6.25"}
-        org.babashka/cli {:mvn/version "0.8.67"}}
+        org.babashka/cli {:mvn/version "0.12.86"}}
  :bbin/bin {bb-build {:main-opts ["-m" "bb-build.cli.main"]}}
  :tasks
  {test {:extra-paths ["test"]
