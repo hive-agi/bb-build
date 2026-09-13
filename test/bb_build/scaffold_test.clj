@@ -49,6 +49,40 @@
                         :license "EPL-2.0" :license-url "https://www.eclipse.org/legal/epl-2.0/"})]
     (is (str/includes? (:content version-edn) "EPL-2.0"))))
 
+(deftest github-owner-parses-remotes
+  (is (= "BuddhiLW" (scaffold/github-owner "git@github.com:BuddhiLW/cleanx.git")))
+  (is (= "hive-agi" (scaffold/github-owner "https://github.com/hive-agi/hive-build.git\n")))
+  (is (= "hive-agi" (scaffold/github-owner "ssh://git@github.com/hive-agi/hive-build")))
+  (is (nil? (scaffold/github-owner "git@gitea.hive-mcp.com:hive-agi/hive-premium.git")))
+  (is (nil? (scaffold/github-owner nil))))
+
+(deftest plan-defaults-to-hive-agi-group
+  (is (= "io.github.hive-agi"
+         (:group (scaffold/plan {:lib "hive-help" :target "/tmp/nope" :kind :clojars})))))
+
+(deftest plan-derives-group-from-github-owner
+  (let [{:keys [group version-edn]}
+        (scaffold/plan {:lib "cleanx" :target "/tmp/nope" :kind :clojars :scm-owner "BuddhiLW"})]
+    (testing "group is io.github.<owner>, lower-cased"
+      (is (= "io.github.buddhilw" group))
+      (is (str/includes? (:content version-edn) "io.github.buddhilw/cleanx")))
+    (testing "scm-url keeps the owner's spelling"
+      (is (str/includes? (:content version-edn) "\"https://github.com/BuddhiLW/cleanx\"")))))
+
+(deftest plan-explicit-group-wins-over-owner
+  (let [{:keys [group version-edn]}
+        (scaffold/plan {:lib "x" :target "/tmp/nope" :kind :clojars
+                        :scm-owner "BuddhiLW" :group "net.clojars.buddhilw"})]
+    (is (= "net.clojars.buddhilw" group))
+    (is (str/includes? (:content version-edn) "net.clojars.buddhilw/x"))
+    (is (str/includes? (:content version-edn) "https://github.com/BuddhiLW/x"))))
+
+(deftest plan-gitea-ignores-github-owner
+  (let [{:keys [group version-edn]}
+        (scaffold/plan {:lib "p" :target "/tmp/nope" :kind :gitea :scm-owner "BuddhiLW"})]
+    (is (= "io.github.hive-agi" group))
+    (is (str/includes? (:content version-edn) "gitea.hive-mcp.com/hive-agi/p"))))
+
 (deftest plan-rejects-unknown-kind
   (is (thrown? clojure.lang.ExceptionInfo
                (scaffold/plan {:lib "x" :target "/tmp/nope" :kind :svn}))))

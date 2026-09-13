@@ -9,7 +9,18 @@
             [clojure.java.io :as io]
             [clojure.string :as str]))
 
-(def group "io.github.hive-agi")
+(def default-group "io.github.hive-agi")
+
+(defn github-owner
+  "Owner segment of a github.com remote URL (scp-style, ssh:// or https), or nil."
+  [remote-url]
+  (when remote-url
+    (second (re-find #"github\.com[:/]([^/\s]+)/" remote-url))))
+
+(defn owner-group
+  "Clojars verified group for a GitHub owner: io.github.<owner>, lower-cased."
+  [owner]
+  (str "io.github." (str/lower-case owner)))
 
 ;; Template kinds. The publish target drives license default, SCM host, the
 ;; release workflow, and its CI directory — never both .github and .gitea.
@@ -56,21 +67,27 @@
 
 (defn plan
   "Pure. Compute the scaffold for `lib` into `target` under template `kind`.
-  Returns {:kind :version-edn {:path :content} :workflow {:path :content}
+  :scm-owner (a GitHub owner, :clojars only) sets the scm-url owner and a
+  default group of io.github.<owner>; an explicit :group wins over both.
+  Returns {:kind :group :version-edn {:path :content} :workflow {:path :content}
   :build-alias str}. Throws on an unknown kind."
-  [{:keys [lib target kind minor license license-url src-dirs]
+  [{:keys [lib target kind minor license license-url src-dirs group scm-owner]
     :or   {minor 1}}]
   (let [k (or (get kinds kind)
               (throw (ex-info (str "unknown kind: " kind)
                               {:kind kind :known (vec (keys kinds))})))
+        owner    (when (= :clojars kind) scm-owner)
+        group    (or group (some-> owner owner-group) default-group)
+        scm-host (if owner (str "github.com/" owner) (:scm-host k))
         lic-name (or license (get-in k [:license :name]))
         lic-url  (or license-url (get-in k [:license :url]))
         src-dirs (or src-dirs (default-src-dirs target))
         subs {:lib lib :group group :minor minor
               :license-name lic-name :license-url lic-url
-              :scm-url (str "https://" (:scm-host k) "/" lib)
+              :scm-url (str "https://" scm-host "/" lib)
               :src-dirs src-dirs :publish (:publish k)}]
     {:kind kind
+     :group group
      :version-edn {:path    (str (fs/path (str target) "version.edn"))
                    :content (render (slurp (resource "bb_build/templates/version.edn.tmpl")) subs)}
      :workflow    {:path    (str (fs/path (str target) (:ci-dir k) "release.yml"))

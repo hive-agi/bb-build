@@ -61,6 +61,12 @@ Then verify locally (writes only to `~/.m2`, no network):
 Kind is autodetected from the target's `origin` remote (github → `clojars`,
 else `gitea`); override with `--kind`.
 
+For `clojars`, the Maven group and `:scm-url` follow the GitHub owner of
+`origin`: `git@github.com:BuddhiLW/cleanx.git` scaffolds
+`io.github.buddhilw/cleanx` with scm `https://github.com/BuddhiLW/cleanx`.
+Without a github origin the group is `io.github.hive-agi`. `--group` overrides
+either; the owner must hold that group on Clojars.
+
 ## Publishability guard
 
 A library is publishable only if every **runtime** `:deps` entry is
@@ -71,6 +77,8 @@ outside its `:test` / `:dev` aliases.
 ## Options
 
 - `--kind clojars|gitea` — template kind (default: autodetect).
+- `--group G` — Maven group (default: `io.github.<owner>` of a github
+  origin, else `io.github.hive-agi`).
 - `--minor N` — `version.edn :minor` (default `1`).
 - `--license NAME` / `--license-url URL` — override the kind's license default.
 - `--force` — overwrite an existing `version.edn` / workflow.
