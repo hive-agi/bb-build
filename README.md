@@ -2,7 +2,8 @@
 
 `bb-build` instantiates the release setup for a Clojure repo the way
 `lein new` instantiates a project: pick a template **kind**, and it writes
-`version.edn` + the release workflow and prints the `:build` alias to add.
+`VERSION`, `version.edn` + the release workflow and prints the `:build` alias
+to add.
 
 It is the companion to **hive-build**, which is a *pure library*: a scaffolded
 repo consumes `hive-build.api` through its `:build` alias — it never gets a
@@ -13,8 +14,8 @@ building.
 
 ```bash
 bbin install io.github.hive-agi/bb-build
-# or, from a checkout:
-cd bb-build && bb bin/bb-build   # runs the CLI directly
+# or, from a checkout (bb.edn puts src/ and resources/ on the classpath):
+cd bb-build && bb -m bb-build.cli.main new <lib> <target-dir> [opts]
 ```
 
 ## Use
@@ -31,6 +32,8 @@ bb-build new hive-premium ../hive-premium --kind gitea
 
 It writes:
 
+- `VERSION`: `0.1.0`, the version `hive-build.api` jars and CI patch-bumps.
+  Written only when absent; an existing `VERSION` is kept even under `--force`.
 - `version.edn` — `{:lib :minor :license :scm-url :src-dirs :publish}`, the
   single source of truth `hive-build.api` reads for the Maven coord and git tag.
 - the release workflow — `.github/workflows/release.yml` (Clojars) or
@@ -40,7 +43,7 @@ and prints the `:build` alias to paste under `:aliases` in the repo's
 `deps.edn`:
 
 ```clojure
-:build {:deps {io.github.hive-agi/hive-build {:mvn/version "0.1.0"}}
+:build {:deps {io.github.hive-agi/hive-build {:mvn/version "0.1.17"}}
         :jvm-opts ["-Xmx1g"]
         :ns-default hive-build.api}
 ```
@@ -81,11 +84,12 @@ outside its `:test` / `:dev` aliases.
   origin, else `io.github.hive-agi`).
 - `--minor N` — `version.edn :minor` (default `1`).
 - `--license NAME` / `--license-url URL` — override the kind's license default.
-- `--force` — overwrite an existing `version.edn` / workflow.
+- `--force` — overwrite an existing `version.edn` / workflow (never `VERSION`).
 
 ## Existing files are never clobbered
 
-Without `--force`, a `version.edn` or workflow that already exists is left
-untouched and reported as `skipped-exists`. `bb-build` never edits `deps.edn` —
+Without `--force`, a `VERSION`, `version.edn` or workflow that already exists
+is left untouched and reported as `skipped-exists`; `VERSION` is kept even with
+`--force`. `bb-build` never edits `deps.edn` —
 the `:build` alias is printed for you to paste, because a hand-maintained
 `deps.edn` is not safe to rewrite automatically.

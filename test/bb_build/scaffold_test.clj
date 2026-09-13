@@ -1,7 +1,8 @@
 (ns bb-build.scaffold-test
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.string :as str]
-            [bb-build.scaffold :as scaffold]))
+            [bb-build.scaffold :as scaffold]
+            [babashka.fs :as fs]))
 
 (deftest publishable?-rejects-git-and-local-runtime-deps
   (testing "pure mvn runtime deps are publishable"
@@ -86,3 +87,44 @@
 (deftest plan-rejects-unknown-kind
   (is (thrown? clojure.lang.ExceptionInfo
                (scaffold/plan {:lib "x" :target "/tmp/nope" :kind :svn}))))
+
+(defn- scratch-target []
+  (let [dir (fs/create-temp-dir {:prefix "bb-build-test"})]
+    (spit (str (fs/path dir "deps.edn")) "{:deps {}}")
+    (str dir)))
+
+(defn- status-of [results path]
+  (:status (first (filter #(= path (:path %)) results))))
+
+(deftest plan-includes-version-file
+  (let [{:keys [version-file]}
+        (scaffold/plan {:lib "x" :target "/tmp/nope" :kind :clojars})]
+    (is (str/ends-with? (:path version-file) "/tmp/nope/VERSION"))
+    (is (= "0.1.0\n" (:content version-file)))))
+
+(deftest apply!-writes-version-when-absent
+  (let [target (scratch-target)]
+    (try
+      (let [p       (scaffold/plan {:lib "x" :target target :kind :clojars})
+            path    (get-in p [:version-file :path])
+            results (scaffold/apply! p {})]
+        (is (= :written (status-of results path)))
+        (is (= "0.1.0\n" (slurp path)))
+        (is (= :written (status-of results (get-in p [:version-edn :path])))))
+      (finally (fs/delete-tree target)))))
+
+(deftest apply!-keeps-existing-version-even-under-force
+  (let [target (scratch-target)
+        path   (str (fs/path target "VERSION"))]
+    (try
+      (spit path "0.4.2\n")
+      (let [p (scaffold/plan {:lib "x" :target target :kind :clojars})]
+        (testing "without :force"
+          (is (= :skipped-exists (status-of (scaffold/apply! p {}) path)))
+          (is (= "0.4.2\n" (slurp path))))
+        (testing "with :force, VERSION still survives while version.edn is rewritten"
+          (let [results (scaffold/apply! p {:force true})]
+            (is (= :skipped-exists (status-of results path)))
+            (is (= :written (status-of results (get-in p [:version-edn :path]))))
+            (is (= "0.4.2\n" (slurp path))))))
+      (finally (fs/delete-tree target)))))

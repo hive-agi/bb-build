@@ -65,11 +65,16 @@
     "[\"src\" \"resources\"]"
     "[\"src\"]"))
 
+(def initial-version
+  "Content of a freshly scaffolded VERSION file (hive-build's patch-bump source)."
+  "0.1.0\n")
+
 (defn plan
   "Pure. Compute the scaffold for `lib` into `target` under template `kind`.
   :scm-owner (a GitHub owner, :clojars only) sets the scm-url owner and a
   default group of io.github.<owner>; an explicit :group wins over both.
-  Returns {:kind :group :version-edn {:path :content} :workflow {:path :content}
+  Returns {:kind :group :version-edn {:path :content}
+  :version-file {:path :content :keep-existing? true} :workflow {:path :content}
   :build-alias str}. Throws on an unknown kind."
   [{:keys [lib target kind minor license license-url src-dirs group scm-owner]
     :or   {minor 1}}]
@@ -88,22 +93,27 @@
               :src-dirs src-dirs :publish (:publish k)}]
     {:kind kind
      :group group
-     :version-edn {:path    (str (fs/path (str target) "version.edn"))
-                   :content (render (slurp (resource "bb_build/templates/version.edn.tmpl")) subs)}
-     :workflow    {:path    (str (fs/path (str target) (:ci-dir k) "release.yml"))
-                   :content (slurp (resource (str "bb_build/templates/" (:workflow k))))}
+     :version-edn  {:path    (str (fs/path (str target) "version.edn"))
+                    :content (render (slurp (resource "bb_build/templates/version.edn.tmpl")) subs)}
+     :version-file {:path           (str (fs/path (str target) "VERSION"))
+                    :content        initial-version
+                    :keep-existing? true}
+     :workflow     {:path    (str (fs/path (str target) (:ci-dir k) "release.yml"))
+                    :content (slurp (resource (str "bb_build/templates/" (:workflow k))))}
      :build-alias (slurp (resource "bb_build/templates/build-alias.edn"))}))
 
 (defn apply!
   "Effectful. Write the planned files. Skips a file that already exists unless
-  :force. Returns [{:path :status}] where status is :written | :skipped-exists.
+  :force; a file planned with :keep-existing? (VERSION) is never overwritten,
+  even under :force. Returns [{:path :status}] where status is
+  :written | :skipped-exists.
   Does NOT edit deps.edn — the :build alias is returned for the caller to inject
   or print, because editing a hand-maintained deps.edn is not safe to automate."
-  [{:keys [version-edn workflow]} {:keys [force]}]
-  (mapv (fn [{:keys [path content]}]
-          (if (and (fs/exists? path) (not force))
+  [{:keys [version-edn version-file workflow]} {:keys [force]}]
+  (mapv (fn [{:keys [path content keep-existing?]}]
+          (if (and (fs/exists? path) (or keep-existing? (not force)))
             {:path path :status :skipped-exists}
             (do (fs/create-dirs (fs/parent path))
                 (spit path content)
                 {:path path :status :written})))
-        [version-edn workflow]))
+        (remove nil? [version-edn version-file workflow])))

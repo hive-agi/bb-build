@@ -20,7 +20,7 @@
    :group       {:desc "Maven group (default: io.github.<owner> of a github origin, else io.github.hive-agi)"}
    :license     {:desc "override license name"}
    :license-url {:desc "override license url"}
-   :force       {:desc "overwrite existing version.edn / workflow" :coerce :boolean}
+   :force       {:desc "overwrite existing version.edn / workflow (never VERSION)" :coerce :boolean}
    :help        {:desc "show this help" :coerce :boolean}})
 
 (defn- origin-url
