@@ -119,10 +119,12 @@ jobs:
           git config user.email "ci@hive-agi.local"
           git add VERSION
           git commit -m "chore(release): ${VER} [skip ci]"
+          # --atomic: branch and tag land together or not at all, so a rejected
+          # branch push cannot leave an orphan tag that fails every later release.
           # Annotated: `git push --follow-tags` ignores lightweight tags, which
           # would publish the artifact and silently drop the tag.
           git tag -a "v${VER}" -m "Release ${VER}"
-          git push --follow-tags
+          git push --atomic --follow-tags
 
       # `deploy` reads version.edn :publish (:gitea). Idempotent — a re-run at a
       # version already in the registry HEAD-checks and skips.
