@@ -128,3 +128,17 @@
             (is (= :written (status-of results (get-in p [:version-edn :path]))))
             (is (= "0.4.2\n" (slurp path))))))
       (finally (fs/delete-tree target)))))
+
+(deftest every-release-template-gates-on-the-licence-before-the-bump
+  ;; LICENSE-CI-GATE: verify-license used to run nowhere, so a licence could
+  ;; drift for months. Every stamped release workflow must run it strictly,
+  ;; and before the bump, since a published pom can never be retracted.
+  (doseq [t ["release-clojars.yml" "release-gitea.yml"]
+          :let [body (slurp (clojure.java.io/resource (str "bb_build/templates/" t)))
+                gate (str/index-of body "clojure -T:build verify-license :strict true")
+                bump (str/index-of body "clojure -T:build bump")]]
+    (testing t
+      (is (some? gate) "runs verify-license strictly")
+      (is (and gate bump (< gate bump)) "before the version is minted")
+      (is (str/includes? body "WARNING: license inconsistency")
+          "an older pinned hive-build that only warns still fails the step"))))
