@@ -44,6 +44,17 @@
     (is (str/includes? (:path workflow) ".gitea/workflows/release.yml"))
     (is (str/includes? (:content workflow) "MAVEN_TOKEN"))))
 
+(deftest release-workflows-release-from-tags
+  (doseq [kind [:clojars :gitea]]
+    (let [wf (:content (:workflow (scaffold/plan {:lib "x" :target "/tmp/nope" :kind kind})))]
+      (testing (str kind " workflow fires on a version.edn or VERSION change")
+        (is (str/includes? wf "- 'version.edn'"))
+        (is (str/includes? wf "- 'VERSION'")))
+      (testing (str kind " workflow pushes a tag only, never a bump commit to main")
+        (is (str/includes? wf "git push origin \"refs/tags/v$VER\""))
+        (is (not (str/includes? wf "git commit")))
+        (is (str/includes? wf "git tag -l 'v[0-9]*'"))))))
+
 (deftest plan-license-override
   (let [{:keys [version-edn]}
         (scaffold/plan {:lib "x" :target "/tmp/nope" :kind :clojars
