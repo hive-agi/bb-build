@@ -32,7 +32,10 @@ bb-build new hive-premium ../hive-premium --kind gitea
 
 It writes:
 
-- `VERSION`: `0.1.0`, the version `hive-build.api` jars and CI patch-bumps.
+- `VERSION`: `0.1.0`, the release FLOOR. CI releases patch+1 of
+  max(`VERSION`, newest `v*` tag) and pushes only the tag, never a commit, so
+  main never gains commits staging lacks. Raise `VERSION` in a staging PR to
+  open a new minor line.
   Written only when absent; an existing `VERSION` is kept even under `--force`.
 - `version.edn` — `{:lib :minor :license :scm-url :src-dirs :publish}`, the
   single source of truth `hive-build.api` reads for the Maven coord and git tag.
