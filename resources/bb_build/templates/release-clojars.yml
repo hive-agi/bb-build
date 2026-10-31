@@ -85,6 +85,15 @@ jobs:
       - name: Bump patch version
         run: clojure -T:build bump :level :patch
 
+      - name: Deploy
+        env:
+          # deps-deploy and hive-build both read CLOJARS_PASSWORD; the org
+          # secret is CLOJARS_DEPLOY_TOKEN. Map one onto the other.
+          CLOJARS_USERNAME: ${{ secrets.CLOJARS_USERNAME }}
+          CLOJARS_PASSWORD: ${{ secrets.CLOJARS_DEPLOY_TOKEN }}
+        run: clojure -T:build deploy
+
+      # After Deploy: a tag means "this version is in the registry".
       - name: Tag
         run: |
           set -euo pipefail
@@ -96,11 +105,3 @@ jobs:
           # Annotated, so the next run's tag scan and `git describe` see it.
           git tag -a "v$VER" -m "release $VER"
           git push origin "refs/tags/v$VER"
-
-      - name: Deploy
-        env:
-          # deps-deploy and hive-build both read CLOJARS_PASSWORD; the org
-          # secret is CLOJARS_DEPLOY_TOKEN. Map one onto the other.
-          CLOJARS_USERNAME: ${{ secrets.CLOJARS_USERNAME }}
-          CLOJARS_PASSWORD: ${{ secrets.CLOJARS_DEPLOY_TOKEN }}
-        run: clojure -T:build deploy
