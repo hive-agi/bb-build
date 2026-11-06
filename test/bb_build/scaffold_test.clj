@@ -4,6 +4,14 @@
             [bb-build.scaffold :as scaffold]
             [babashka.fs :as fs]))
 
+(def mit-text "MIT License\n\nCopyright (c) 2026 hive-agi\n\nPermission is hereby granted, free of charge, ...")
+
+(defn- plan*
+  "`scaffold/plan` for a public repo whose ./LICENSE is MIT, unless `m` says
+  otherwise. The gates themselves are exercised separately below."
+  [m]
+  (scaffold/plan (merge {:visibility "public" :license-file-text mit-text} m)))
+
 (deftest publishable?-rejects-git-and-local-runtime-deps
   (testing "pure mvn runtime deps are publishable"
     (is (scaffold/publishable?
@@ -21,7 +29,7 @@
 
 (deftest plan-clojars-kind
   (let [{:keys [kind version-edn workflow build-alias]}
-        (scaffold/plan {:lib "hive-help" :target "/tmp/nope" :kind :clojars :minor 3})]
+        (plan* {:lib "hive-help" :target "/tmp/nope" :kind :clojars :minor 3})]
     (is (= :clojars kind))
     (testing "version.edn carries the rendered coord, minor, MIT, github scm, :clojars"
       (is (str/includes? (:content version-edn) "io.github.hive-agi/hive-help"))
@@ -38,7 +46,7 @@
 
 (deftest plan-gitea-kind
   (let [{:keys [version-edn workflow]}
-        (scaffold/plan {:lib "hive-premium" :target "/tmp/nope" :kind :gitea})]
+        (plan* {:lib "hive-premium" :target "/tmp/nope" :kind :gitea})]
     (is (str/includes? (:content version-edn) ":publish  :gitea"))
     (is (str/includes? (:content version-edn) "gitea.hive-mcp.com/hive-agi/hive-premium"))
     (is (str/includes? (:path workflow) ".gitea/workflows/release.yml"))
@@ -46,7 +54,7 @@
 
 (deftest release-workflows-release-from-tags
   (doseq [kind [:clojars :gitea]]
-    (let [wf (:content (:workflow (scaffold/plan {:lib "x" :target "/tmp/nope" :kind kind})))]
+    (let [wf (:content (:workflow (plan* {:lib "x" :target "/tmp/nope" :kind kind})))]
       (testing (str kind " workflow fires on a version.edn or VERSION change")
         (is (str/includes? wf "- 'version.edn'"))
         (is (str/includes? wf "- 'VERSION'")))
@@ -57,7 +65,7 @@
 
 (deftest plan-license-override
   (let [{:keys [version-edn]}
-        (scaffold/plan {:lib "x" :target "/tmp/nope" :kind :clojars
+        (plan* {:lib "x" :target "/tmp/nope" :kind :clojars
                         :license "EPL-2.0" :license-url "https://www.eclipse.org/legal/epl-2.0/"})]
     (is (str/includes? (:content version-edn) "EPL-2.0"))))
 
@@ -70,11 +78,11 @@
 
 (deftest plan-defaults-to-hive-agi-group
   (is (= "io.github.hive-agi"
-         (:group (scaffold/plan {:lib "hive-help" :target "/tmp/nope" :kind :clojars})))))
+         (:group (plan* {:lib "hive-help" :target "/tmp/nope" :kind :clojars})))))
 
 (deftest plan-derives-group-from-github-owner
   (let [{:keys [group version-edn]}
-        (scaffold/plan {:lib "cleanx" :target "/tmp/nope" :kind :clojars :scm-owner "BuddhiLW"})]
+        (plan* {:lib "cleanx" :target "/tmp/nope" :kind :clojars :scm-owner "BuddhiLW"})]
     (testing "group is io.github.<owner>, lower-cased"
       (is (= "io.github.buddhilw" group))
       (is (str/includes? (:content version-edn) "io.github.buddhilw/cleanx")))
@@ -83,7 +91,7 @@
 
 (deftest plan-explicit-group-wins-over-owner
   (let [{:keys [group version-edn]}
-        (scaffold/plan {:lib "x" :target "/tmp/nope" :kind :clojars
+        (plan* {:lib "x" :target "/tmp/nope" :kind :clojars
                         :scm-owner "BuddhiLW" :group "net.clojars.buddhilw"})]
     (is (= "net.clojars.buddhilw" group))
     (is (str/includes? (:content version-edn) "net.clojars.buddhilw/x"))
@@ -91,13 +99,13 @@
 
 (deftest plan-gitea-ignores-github-owner
   (let [{:keys [group version-edn]}
-        (scaffold/plan {:lib "p" :target "/tmp/nope" :kind :gitea :scm-owner "BuddhiLW"})]
+        (plan* {:lib "p" :target "/tmp/nope" :kind :gitea :scm-owner "BuddhiLW"})]
     (is (= "io.github.hive-agi" group))
     (is (str/includes? (:content version-edn) "gitea.hive-mcp.com/hive-agi/p"))))
 
 (deftest plan-rejects-unknown-kind
   (is (thrown? clojure.lang.ExceptionInfo
-               (scaffold/plan {:lib "x" :target "/tmp/nope" :kind :svn}))))
+               (plan* {:lib "x" :target "/tmp/nope" :kind :svn}))))
 
 (defn- scratch-target []
   (let [dir (fs/create-temp-dir {:prefix "bb-build-test"})]
@@ -109,14 +117,14 @@
 
 (deftest plan-includes-version-file
   (let [{:keys [version-file]}
-        (scaffold/plan {:lib "x" :target "/tmp/nope" :kind :clojars})]
+        (plan* {:lib "x" :target "/tmp/nope" :kind :clojars})]
     (is (str/ends-with? (:path version-file) "/tmp/nope/VERSION"))
     (is (= "0.1.0\n" (:content version-file)))))
 
 (deftest apply!-writes-version-when-absent
   (let [target (scratch-target)]
     (try
-      (let [p       (scaffold/plan {:lib "x" :target target :kind :clojars})
+      (let [p       (plan* {:lib "x" :target target :kind :clojars})
             path    (get-in p [:version-file :path])
             results (scaffold/apply! p {})]
         (is (= :written (status-of results path)))
@@ -129,7 +137,7 @@
         path   (str (fs/path target "VERSION"))]
     (try
       (spit path "0.4.2\n")
-      (let [p (scaffold/plan {:lib "x" :target target :kind :clojars})]
+      (let [p (plan* {:lib "x" :target target :kind :clojars})]
         (testing "without :force"
           (is (= :skipped-exists (status-of (scaffold/apply! p {}) path)))
           (is (= "0.4.2\n" (slurp path))))
@@ -153,3 +161,39 @@
       (is (and gate bump (< gate bump)) "before the version is minted")
       (is (str/includes? body "WARNING: license inconsistency")
           "an older pinned hive-build that only warns still fails the step"))))
+
+;; ── CLOJARS-INFRA gates: no invented licence, no private repo on Clojars ──
+
+(defn- refusal [m]
+  (try (scaffold/plan (merge {:lib "x" :target "/tmp/nope" :kind :clojars} m))
+       nil
+       (catch clojure.lang.ExceptionInfo e (:reason (ex-data e)))))
+
+(deftest no-licence-is-ever-defaulted
+  (testing "neither --license nor ./LICENSE: refuse rather than write MIT"
+    (is (= :license/missing (refusal {:visibility "public"}))))
+  (testing "the gitea kind no longer defaults to Proprietary either"
+    (is (= :license/missing (refusal {:kind :gitea}))))
+  (testing "a LICENSE that names nothing recognisable is refused, not guessed"
+    (is (= :license/unrecognized (refusal {:visibility "public"
+                                           :license-file-text "do what you like"}))))
+  (testing "an explicit unknown licence needs its URL"
+    (is (= :license/url-missing (refusal {:visibility "public" :license "WTFPL"})))))
+
+(deftest the-licence-is-read-from-the-license-file
+  (doseq [[text expected] [[mit-text "MIT"]
+                           ["Eclipse Public License - v 2.0\n..." "EPL-2.0"]
+                           ["                                 Apache License\n Version 2.0" "Apache-2.0"]
+                           ["Copyright hive-agi. All rights reserved." "Proprietary"]]]
+    (let [{:keys [version-edn]} (plan* {:lib "x" :target "/tmp/nope" :kind :clojars
+                                        :license-file-text text})]
+      (is (str/includes? (:content version-edn) (str "\"" expected "\"")) expected))))
+
+(deftest only-a-public-repo-is-scaffolded-for-clojars
+  (doseq [v [nil "private" "internal" "PRIVATE"]]
+    (is (= :visibility/not-public (refusal {:visibility v :license-file-text mit-text}))
+        (str "visibility " (pr-str v))))
+  (testing "visibility is the forge's answer in any case"
+    (is (nil? (refusal {:visibility "PUBLIC" :license-file-text mit-text}))))
+  (testing "a private Gitea kind does not ask"
+    (is (nil? (refusal {:kind :gitea :visibility nil :license-file-text mit-text})))))
