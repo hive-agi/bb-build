@@ -63,6 +63,16 @@
         (is (not (str/includes? wf "git commit")))
         (is (str/includes? wf "git tag -l 'v[0-9]*'"))))))
 
+(deftest release-workflows-tag-only-after-deploy
+  (doseq [kind [:clojars :gitea]]
+    (let [wf (:content (:workflow (scaffold/plan {:lib "x" :target "/tmp/nope" :kind kind})))
+          deploy-at (str/index-of wf "clojure -T:build deploy")
+          tag-at (str/index-of wf "git tag -a")]
+      (testing (str kind " workflow deploys, then tags, so a failed deploy leaves no orphan tag")
+        (is (some? deploy-at))
+        (is (some? tag-at))
+        (is (< deploy-at tag-at))))))
+
 (deftest plan-license-override
   (let [{:keys [version-edn]}
         (plan* {:lib "x" :target "/tmp/nope" :kind :clojars
