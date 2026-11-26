@@ -94,6 +94,14 @@
     (testing "the Clojure CLI is pinned"
       (is (str/includes? body "CLOJURE_CLI_VERSION: 1.12.7.1681")))))
 
+(deftest staging-gate-runs-the-licence-gate-only-when-deps-edn-declares-build
+  (let [body (slurp (str (fs/path repo-root "resources/bb_build/templates/staging-gate.yml")))]
+    (testing "the licence step is guarded on the :build alias, not assumed"
+      (is (str/includes? body "[:aliases :build]"))
+      (is (str/includes? body "no :build alias in deps.edn; skipping")))
+    (testing "and it still stops the run on real licence drift"
+      (is (str/includes? body "clojure -T:build verify-license :strict true")))))
+
 ;; ── drift and sync over fixture repos ─────────────────────────────────────
 
 (deftest a-clean-repo-passes
