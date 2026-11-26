@@ -41,9 +41,27 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      # Caches the resolved dependency tree across runs, keyed on the files
+      # that declare it.
+      - name: Cache Maven and gitlibs
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+          key: deps-${{ runner.os }}-${{ hashFiles('deps.edn', 'bb.edn') }}
+          restore-keys: |
+            deps-${{ runner.os }}-
+
       - uses: DeLaGuardo/setup-clojure@13.7.0
         with:
-          cli: latest
+          cli: 1.12.7.1681
 
       # Licence gate. LICENSE, version.edn :license and the src SPDX headers
       # must agree, and a published pom can never be retracted, so drift has to

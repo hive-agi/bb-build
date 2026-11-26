@@ -65,7 +65,7 @@
 
 (deftest release-workflows-tag-only-after-deploy
   (doseq [kind [:clojars :gitea]]
-    (let [wf (:content (:workflow (scaffold/plan {:lib "x" :target "/tmp/nope" :kind kind})))
+    (let [wf (:content (:workflow (plan* {:lib "x" :target "/tmp/nope" :kind kind})))
           deploy-at (str/index-of wf "clojure -T:build deploy")
           tag-at (str/index-of wf "git tag -a")]
       (testing (str kind " workflow deploys, then tags, so a failed deploy leaves no orphan tag")

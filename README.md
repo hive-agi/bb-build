@@ -89,6 +89,29 @@ outside its `:test` / `:dev` aliases.
 - `--license NAME` / `--license-url URL` — override the kind's license default.
 - `--force` — overwrite an existing `version.edn` / workflow (never `VERSION`).
 
+## Keeping a repo in sync with the templates
+
+The templates in `resources/bb_build/templates` are the only place a CI action
+version is written. Two tasks render them into a repo and report drift:
+
+```bash
+# print a unified diff of what would change; writes nothing
+bb ci:sync ../hive-help
+
+# apply it (managed files only; a hand-written workflow is never touched)
+bb ci:sync ../hive-help --write
+
+# exit non-zero if a managed copy differs from its template, or any workflow
+# in the repo pins an action below the template's major
+bb ci:drift ../hive-help
+```
+
+The forge is detected from the repo's layout (`.gitea/workflows` and no
+`.github/workflows` means Gitea) and can be forced with `--forge github|gitea`.
+A managed file is one whose name matches a template: `staging-gate.yml` and
+`release.yml`. Rendering is per-repo substitution-free, so every repo that runs
+`ci:sync --write` gets a byte-identical copy.
+
 ## Existing files are never clobbered
 
 Without `--force`, a `VERSION`, `version.edn` or workflow that already exists
