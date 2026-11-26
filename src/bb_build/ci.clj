@@ -18,14 +18,18 @@
 
 (def forges
   "Per forge: the workflow directory a repo uses, and the template resource
-  rendered under each managed file name. release.yml is a different template on
-  each forge; staging-gate.yml is one file for both."
+  rendered under each managed file name. staging-gate.yml is one file for both
+  forges. The release template is not fixed on Gitea: a repo with a tracked
+  VERSION releases PINNED (bump, commit, tag) and one without releases ROLLING
+  (0.{minor}.{git-count-revs}, no bump), so :release-templates names both and
+  the mode is decided per repo."
   {:github {:dir       ".github/workflows"
             :templates {"staging-gate.yml" "bb_build/templates/staging-gate.yml"
                         "release.yml"      "bb_build/templates/release-clojars.yml"}}
    :gitea  {:dir       ".gitea/workflows"
-            :templates {"staging-gate.yml" "bb_build/templates/staging-gate.yml"
-                        "release.yml"      "bb_build/templates/release-gitea.yml"}}})
+            :templates {"staging-gate.yml" "bb_build/templates/staging-gate.yml"}
+            :release-templates {:pinned  "bb_build/templates/release-gitea.yml"
+                                :rolling "bb_build/templates/release-gitea-rolling.yml"}}})
 
 (def action-floors
   "The lowest action major a hive workflow may pin, by action. The templates
@@ -269,16 +273,31 @@
     (slurp r)
     (throw (ex-info (str "template not found on classpath: " path) {:path path}))))
 
-(defn rendered-templates
-  "Managed file name -> rendered text, for `forge`. Reads the classpath
-  templates; `render` itself is pure."
-  [forge]
+(defn template-resources
+  "Managed file name -> classpath resource, for `forge` in release `mode`.
+  Pure. A forge whose release template is fixed (:github) ignores `mode`; on
+  Gitea it picks the pinned or the rolling template, and an unknown mode is
+  refused rather than silently rendered as the other one."
+  [forge mode]
   (let [spec (or (get forges forge)
                  (throw (ex-info (str "unknown forge: " forge)
                                  {:forge forge :known (vec (keys forges))})))]
-    (into {}
-          (for [[name resource] (:templates spec)]
-            [name (render (read-resource resource))]))))
+    (if-let [release (:release-templates spec)]
+      (merge (:templates spec)
+             {"release.yml" (or (get release mode)
+                                (throw (ex-info (str "unknown release mode: " mode)
+                                                {:forge forge :mode mode
+                                                 :known (vec (keys release))})))})
+      (:templates spec))))
+
+(defn rendered-templates
+  "Managed file name -> rendered text, for `forge` in release `mode` (default
+  :pinned). Reads the classpath templates; `render` itself is pure."
+  ([forge] (rendered-templates forge :pinned))
+  ([forge mode]
+   (into {}
+         (for [[name resource] (template-resources forge mode)]
+           [name (render (read-resource resource))]))))
 
 ;; ── the thin boundary: filesystem only below here ─────────────────────────
 
@@ -292,6 +311,14 @@
     :github))
 
 (defn workflow-dir [repo forge] (fs/path repo (get-in forges [forge :dir])))
+
+(defn release-mode
+  "The release model a repo is on, read from whether ./VERSION is tracked.
+  A tracked VERSION is :pinned (bump, commit, tag); no VERSION is :rolling
+  (0.{minor}.{git-count-revs}, no bump). Never guessed from a workflow body:
+  the file is what build.clj reads at release time."
+  [repo]
+  (if (fs/regular-file? (fs/path repo "VERSION")) :pinned :rolling))
 
 (defn- workflow-file? [f]
   (let [n (str (fs/file-name f))]
@@ -310,12 +337,23 @@
 
 (def ^:private cli-spec
   {:forge {:desc "forge: github | gitea (default: detected from the repo)" :coerce :keyword}
+   :mode  {:desc "release mode: pinned | rolling (default: detected from VERSION)" :coerce :keyword}
    :write {:desc "write the rendered files (default: print a diff only)" :coerce :boolean}
    :help  {:desc "show this help" :coerce :boolean}})
 
 (defn- parse-target [argv]
   (let [{:keys [args opts]} (cli/parse-args (vec argv) {:spec cli-spec})]
     (assoc opts :repo (first args))))
+
+(defn- target-forge-mode
+  "[forge mode] for a parsed argv: the given or detected forge, and the release
+  mode it will render. Only Gitea has two release templates, so a GitHub target
+  reports :pinned and reads no VERSION."
+  [repo {:keys [forge mode]}]
+  (let [forge (or forge (detect-forge repo))]
+    [forge (if (:release-templates (get forges forge))
+             (or mode (release-mode repo))
+             :pinned)]))
 
 (defn- ok-dir? [repo]
   (if (fs/directory? repo)
@@ -324,28 +362,33 @@
         (System/exit 2))))
 
 (defn sync-task
-  "ci:sync <repo-dir> [--forge github|gitea] [--write]: render each managed
-  template into the repo's workflow directory, printing a unified diff. Writes
-  only with --write, and only managed files."
+  "ci:sync <repo-dir> [--forge github|gitea] [--mode pinned|rolling] [--write]:
+  render each managed template into the repo's workflow directory, printing a
+  unified diff. The release template follows the repo's release model (a
+  tracked VERSION is pinned, its absence rolling) unless --mode overrides it.
+  Writes only with --write, and only managed files."
   [argv]
   (let [{:keys [repo write help]} (parse-target argv)]
     (when (or help (nil? repo))
-      (println "usage: bb ci:sync <repo-dir> [--forge github|gitea] [--write]")
+      (println "usage: bb ci:sync <repo-dir> [--forge github|gitea] [--mode pinned|rolling] [--write]")
       (System/exit (if (nil? repo) 2 0)))
     (ok-dir? repo)
-    (let [forge    (or (:forge (parse-target argv)) (detect-forge repo))
+    (let [[forge mode] (target-forge-mode repo (parse-target argv))
           dir      (workflow-dir repo forge)
-          expected (rendered-templates forge)
-          findings (drift-findings expected (read-workflows repo forge))
+          actual   (read-workflows repo forge)
+          expected (rendered-templates forge mode)
+          findings (drift-findings expected actual)
           copies   (filterv #(#{:missing :differs} (:kind %)) findings)]
       (if (empty? copies)
-        (println (str "ci:sync: " repo " (" (name forge) "): all " (count expected)
-                      " managed workflows already match their templates"))
+        (println (str "ci:sync: " repo " (" (name forge) ", " (name mode) "): all "
+                      (count expected) " managed workflows already match their templates"))
         (let [diffs (into (sorted-map)
                           (for [{:keys [path kind]} copies]
                             [path (unified-diff path
-                                                (if (= :missing kind) "" (get (read-workflows repo forge) path ""))
+                                                (if (= :missing kind) "" (get actual path ""))
                                                 (get expected path))]))]
+          (println (str "ci:sync: " repo " (" (name forge) ", " (name mode) "): "
+                        (count diffs) " managed file(s) to render"))
           (doseq [[_ diff] diffs] (print diff))
           (if write
             (do (fs/create-dirs dir)
@@ -356,17 +399,19 @@
                           " file(s) would change; re-run with --write to apply"))))))))
 
 (defn drift-task
-  "ci:drift <repo-dir> [--forge github|gitea]: print one line per finding and
-  exit non-zero when the repo has drifted from the templates."
+  "ci:drift <repo-dir> [--forge github|gitea] [--mode pinned|rolling]: print one
+  line per finding and exit non-zero when the repo has drifted from the
+  templates. Compares against the release template the repo's own release
+  model selects, so a rolling repo is judged against the rolling one."
   [argv]
-  (let [{:keys [repo help forge]} (parse-target argv)]
+  (let [{:keys [repo help]} (parse-target argv)]
     (when (or help (nil? repo))
-      (println "usage: bb ci:drift <repo-dir> [--forge github|gitea]")
+      (println "usage: bb ci:drift <repo-dir> [--forge github|gitea] [--mode pinned|rolling]")
       (System/exit (if (nil? repo) 2 0)))
     (ok-dir? repo)
-    (let [f (or forge (detect-forge repo))
-          findings (drift-findings (rendered-templates f) (read-workflows repo f))]
+    (let [[forge mode] (target-forge-mode repo (parse-target argv))
+          findings (drift-findings (rendered-templates forge mode) (read-workflows repo forge))]
       (if (empty? findings)
-        (println (str "ci:drift: " repo " (" (name f) "): clean"))
+        (println (str "ci:drift: " repo " (" (name forge) ", " (name mode) "): clean"))
         (do (doseq [x findings] (println (finding-line x)))
             (System/exit 1))))))

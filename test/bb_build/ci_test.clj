@@ -30,10 +30,13 @@
     dir))
 
 (defn- managed-into
-  "Write every rendered template for `forge` into `dir`, since a clean repo is
-  one that already holds byte-identical copies."
-  [dir forge ci-dir]
-  (doseq [[name text] (ci/rendered-templates forge)]
+  "Write every rendered template for `forge` in `mode` into `dir`, since a
+  clean repo is one that already holds byte-identical copies. A tracked VERSION
+  file is what makes the repo pinned; without one it is rolling."
+  [dir forge ci-dir mode]
+  (when (= :pinned mode)
+    (spit (str (fs/path dir "VERSION")) "0.1.0\n"))
+  (doseq [[name text] (ci/rendered-templates forge mode)]
     (let [f (fs/path dir ci-dir name)]
       (fs/create-dirs (fs/parent f))
       (spit (str f) text)))
@@ -105,17 +108,19 @@
 ;; ── drift and sync over fixture repos ─────────────────────────────────────
 
 (deftest a-clean-repo-passes
-  (doseq [[forge ci-dir] [[:github ".github/workflows"] [:gitea ".gitea/workflows"]]]
-    (let [dir (managed-into (fixture ci-dir {}) forge ci-dir)]
-      (testing (str forge " clean")
-        (is (empty? (ci/drift-findings (ci/rendered-templates forge)
+  (doseq [forge [:github :gitea]
+          mode  [:pinned :rolling]
+          :let  [ci-dir (if (= :gitea forge) ".gitea/workflows" ".github/workflows")]]
+    (let [dir (managed-into (fixture ci-dir {}) forge ci-dir mode)]
+      (testing (str (name forge) " " (name mode) " clean")
+        (is (empty? (ci/drift-findings (ci/rendered-templates forge mode)
                                        (ci/read-workflows dir forge))))
         (is (= 0 (:exit (p/sh {:continue true} "bb" "ci:drift" dir
                                :dir repo-root))))))))
 
 (deftest drift-on-an-edited-copy
   (let [forge :github
-        dir   (managed-into (fixture ".github/workflows" {}) forge ".github/workflows")
+        dir   (managed-into (fixture ".github/workflows" {}) forge ".github/workflows" :pinned)
         f     (str (fs/path dir ".github/workflows/staging-gate.yml"))]
     (spit f (str (slurp f) "\n# hand-edited\n"))
     (let [findings (ci/drift-findings (ci/rendered-templates forge)
@@ -141,7 +146,7 @@
                                         "    steps:\n"
                                         "      - uses: actions/checkout@v4\n"
                                         "      - uses: actions/setup-node@v7\n")})
-               forge ".github/workflows")
+               forge ".github/workflows" :pinned)
         findings (ci/drift-findings (ci/rendered-templates forge)
                                     (ci/read-workflows dir forge))]
     (testing "only the below-floor pin is a finding, and the file is named"
@@ -154,7 +159,7 @@
 
 (deftest an-unmanaged-file-is-never-touched
   (let [dir (managed-into (fixture ".github/workflows" {"notes.yml" "custom\n"})
-                          :github ".github/workflows")]
+                          :github ".github/workflows" :pinned)]
     (p/sh {:continue true} "bb" "ci:sync" dir "--write" :dir repo-root)
     (is (= "custom\n" (slurp (str (fs/path dir ".github/workflows/notes.yml")))))))
 
@@ -194,3 +199,76 @@
     (testing "the gitea release template is the Maven one, not the Clojars one"
       (is (str/includes? (slurp (str (fs/path dir ".gitea/workflows/release.yml")))
                          "MAVEN_TOKEN")))))
+
+;; ── release mode: pinned vs rolling ──────────────────────────────────────
+
+(deftest release-mode-follows-the-tracked-version-file
+  (testing "a fresh repo with no VERSION is rolling"
+    (is (= :rolling (ci/release-mode (fixture ".gitea/workflows" {})))))
+  (let [dir (fixture ".gitea/workflows" {})]
+    (spit (str (fs/path dir "VERSION")) "0.2.0\n")
+    (is (= :pinned (ci/release-mode dir)))
+    (fs/delete (fs/path dir "VERSION"))
+    (is (= :rolling (ci/release-mode dir)))))
+
+(deftest the-mode-chooses-the-release-template
+  (testing "gitea has both templates and renders the one the mode names"
+    (is (str/includes? (get (ci/rendered-templates :gitea :rolling) "release.yml")
+                       "ROLLING release"))
+    (is (str/includes? (get (ci/rendered-templates :gitea :pinned) "release.yml")
+                       "PINNED release"))
+    (is (not= (get (ci/rendered-templates :gitea :rolling) "release.yml")
+              (get (ci/rendered-templates :gitea :pinned) "release.yml"))))
+  (testing "staging-gate is one file either way"
+    (is (= (get (ci/rendered-templates :gitea :rolling) "staging-gate.yml")
+           (get (ci/rendered-templates :gitea :pinned) "staging-gate.yml"))))
+  (testing "github has one release template, so the mode changes nothing"
+    (is (= (ci/rendered-templates :github) (ci/rendered-templates :github :rolling)))))
+
+(deftest an-unknown-release-mode-is-refused
+  (is (thrown? clojure.lang.ExceptionInfo (ci/rendered-templates :gitea :sometimes))))
+
+(deftest sync-renders-the-rolling-template-when-there-is-no-version
+  (let [dir (fixture ".gitea/workflows" {})
+        f   (str (fs/path dir ".gitea/workflows/release.yml"))
+        out (ok-text "ci:sync" dir "--write" :dir repo-root)]
+    (testing "the run says which mode it rendered"
+      (is (str/includes? out "gitea, rolling")))
+    (testing "the copy is the rolling template"
+      (is (str/includes? (slurp f) "ROLLING release"))
+      (is (not (str/includes? (slurp f) "Bump patch version"))))
+    (testing "and drift is clean against the rolling template"
+      (is (= 0 (:exit (p/sh {:continue true} "bb" "ci:drift" dir :dir repo-root)))))
+    (testing "an explicit --mode still wins, for inspecting the other side"
+      (is (str/includes? (ok-text "ci:sync" dir "--mode" "pinned" :dir repo-root)
+                         "pinned")))))
+
+(deftest sync-renders-the-pinned-template-when-a-version-is-tracked
+  (let [dir (fixture ".gitea/workflows" {})]
+    (spit (str (fs/path dir "VERSION")) "0.2.0\n")
+    (let [f   (str (fs/path dir ".gitea/workflows/release.yml"))
+          out (ok-text "ci:sync" dir "--write" :dir repo-root)]
+      (testing "pinned mode is reported and renders the bump-and-tag template"
+        (is (str/includes? out "gitea, pinned"))
+        (is (str/includes? (slurp f) "PINNED release"))
+        (is (str/includes? (slurp f) "Bump patch version")))
+      (testing "drift is clean against the pinned template"
+        (is (= 0 (:exit (p/sh {:continue true} "bb" "ci:drift" dir :dir repo-root))))))))
+
+(deftest drift-judges-each-mode-against-its-own-template
+  (testing "a rolling repo holding the pinned copy is drift, not a match"
+    (let [dir (fixture ".gitea/workflows" {})]
+      (doseq [[name text] (ci/rendered-templates :gitea :pinned)]
+        (spit (str (fs/path dir ".gitea/workflows" name)) text))
+      (is (= [{:kind :differs :path "release.yml"}]
+             (vec (ci/drift-findings (ci/rendered-templates :gitea :rolling)
+                                     (ci/read-workflows dir :gitea)))))
+      (is (= 1 (:exit (p/sh {:continue true} "bb" "ci:drift" dir :dir repo-root)))
+          "ci:drift reads the repo's own mode, so it selects rolling here")))
+  (testing "and a pinned repo holding the rolling copy is drift too"
+    (let [dir (fixture ".gitea/workflows" {})]
+      (doseq [[name text] (ci/rendered-templates :gitea :rolling)]
+        (spit (str (fs/path dir ".gitea/workflows" name)) text))
+      (is (= [{:kind :differs :path "release.yml"}]
+             (vec (ci/drift-findings (ci/rendered-templates :gitea :pinned)
+                                     (ci/read-workflows dir :gitea))))))))
