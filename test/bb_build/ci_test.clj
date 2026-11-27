@@ -272,3 +272,103 @@
       (is (= [{:kind :differs :path "release.yml"}]
              (vec (ci/drift-findings (ci/rendered-templates :gitea :pinned)
                                      (ci/read-workflows dir :gitea))))))))
+
+(defn- resolve-step-script
+  "The shell of the 'Resolve release base from tags' step of `workflow-text`,
+  dedented. Read out of the rendered template rather than kept as a second copy,
+  so the test cannot pass against a script that drifted from the workflow."
+  [workflow-text]
+  (let [lines  (str/split-lines workflow-text)
+        name-i (->> (map-indexed vector lines)
+                    (filter (fn [[_ l]] (str/includes? l "name: Resolve release base from tags")))
+                    ffirst)]
+    (when (nil? name-i)
+      (throw (ex-info "no 'Resolve release base from tags' step in the workflow" {})))
+    (let [run-i  (->> (range (inc name-i) (count lines))
+                      (filter (fn [i] (str/includes? (nth lines i) "run: |")))
+                      first)
+          indent (count (take-while #(= \space %) (nth lines run-i)))
+          body   (->> (drop (inc run-i) lines)
+                      (take-while (fn [l] (or (str/blank? l)
+                                              (>= (count (take-while #(= \space %) l))
+                                                  (+ indent 2))))))]
+      (str/join "\n" (map (fn [l] (subs l (min (+ indent 2) (count l)))) body)))))
+
+(defn- git-init-with-fixture!
+  "Create a throwaway git repo at `dir` whose VERSION is `version`, commit it,
+  and create a v* tag for each of `tags` (none is how the no-tag case is built).
+  Returns `dir`."
+  [dir version tags]
+  (spit (str (fs/path dir "VERSION")) (str version "\n"))
+  (let [git (fn [& args] (apply p/sh {:dir dir :continue true} "git" args))]
+    (git "init" "-q" "-b" "main")
+    (git "add" "VERSION")
+    (git "commit" "-q" "-m" "init")
+    (doseq [t tags] (git "tag" t)))
+  dir)
+
+(defn- resolve-release-base
+  "Execute the rendered release-clojars.yml 'Resolve release base from tags'
+  step's shell against a throwaway repo whose VERSION is `version` and whose
+  tags are `tags`. Returns {:version \"x.y.z\" :bump \"true\"|\"false\"}. The
+  step writes BUMP to $GITHUB_ENV, exactly as a runner would, so the test reads
+  the same value the bump step's `if:` reads."
+  [version tags]
+  (let [dir   (str (fs/create-temp-dir {:prefix "bb-build-release-floor-"}))
+        env   (str (fs/path dir "github-env"))
+        script (str (fs/path dir "resolve.sh"))
+        body  (resolve-step-script (get (ci/rendered-templates :github) "release.yml"))]
+    (try
+      (spit script body)
+      (spit env "")
+      (git-init-with-fixture! dir version tags)
+      (let [{:keys [exit err out]} (p/sh {:dir dir :continue true
+                                          :extra-env {"GITHUB_ENV" env}}
+                                         "bash" script)]
+        (when-not (zero? exit)
+          (throw (ex-info (str "resolve step failed: " err) {:exit exit})))
+        {:version (str/trim (slurp (str (fs/path dir "VERSION"))))
+         :bump    (->> (str/split-lines (slurp env))
+                       (some (fn [l] (second (str/split l #"=" 2)))))
+         :log     (str/trim out)})
+      (finally (fs/delete-tree dir)))))
+
+(deftest a-floor-above-the-newest-tag-releases-exactly
+  ;; RELEASE-FLOOR: VERSION is a floor. When it is STRICTLY above the newest
+  ;; v* tag (or there is no tag), it IS the release: `bump :patch` always
+  ;; increments, so a raised floor could never otherwise ship x.y.0.
+  (testing "0.7.0 over tag v0.6.3 releases 0.7.0 and does not bump"
+    (let [{:keys [version bump]} (resolve-release-base "0.7.0" ["v0.6.3"])]
+      (is (= "0.7.0" version))
+      (is (= "false" bump) "the bump step's `if:` must be off")))
+  (testing "no tags at all releases VERSION as-is"
+    (let [{:keys [version bump]} (resolve-release-base "0.1.0" [])]
+      (is (= "0.1.0" version))
+      (is (= "false" bump))))
+  (testing "the step's echo says which branch it took"
+    (is (str/includes? (:log (resolve-release-base "0.7.0" ["v0.6.3"]))
+                       "releasing 0.7.0 exactly (no bump)"))
+    (is (str/includes? (:log (resolve-release-base "0.6.0" ["v0.6.3"]))
+                       "bumping patch on 0.6.3"))))
+
+(deftest a-floor-at-or-below-the-newest-tag-still-bumps-the-patch
+  (testing "0.6.0 under tag v0.6.3 bumps 0.6.3"
+    (let [{:keys [version bump]} (resolve-release-base "0.6.0" ["v0.6.3"])]
+      (is (= "0.6.3" version) "the base handed to the bump is the newest tag")
+      (is (= "true" bump))))
+  (testing "a floor EQUAL to the tag is not above it, so it bumps too"
+    (let [{:keys [version bump]} (resolve-release-base "0.6.3" ["v0.6.3"])]
+      (is (= "0.6.3" version))
+      (is (= "true" bump)))))
+
+(deftest the-floor-rule-renders-into-both-pinned-release-templates
+  ;; Both pinned templates carry the same resolve-then-bump logic; a repo on
+  ;; either forge must obey the floor rule, so the same step is rendered in
+  ;; each. The rolling Gitea template has no floor and no bump, so it is out.
+  (doseq [t ["release-clojars.yml" "release-gitea.yml"]]
+    (let [body (slurp (clojure.java.io/resource (str "bb_build/templates/" t)))]
+      (testing t
+        (is (str/includes? body "if: env.BUMP == 'true'")
+            "the bump step is guarded on the resolved BUMP")
+        (is (str/includes? body "echo \"BUMP=$BUMP\" >> \"$GITHUB_ENV\"")
+            "the resolve step publishes BUMP to the runner env")))))
