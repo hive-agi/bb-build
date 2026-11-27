@@ -26,15 +26,73 @@
 ;; release workflow, and its CI directory — never both .github and .gitea.
 (def kinds
   {:clojars {:publish  :clojars
-             :license  {:name "MIT" :url "https://opensource.org/licenses/MIT"}
              :scm-host "github.com/hive-agi"
              :workflow "release-clojars.yml"
-             :ci-dir   ".github/workflows"}
+             :ci-dir   ".github/workflows"
+             :public?  true}
    :gitea   {:publish  :gitea
-             :license  {:name "Proprietary" :url "https://gitea.hive-mcp.com/hive-agi"}
              :scm-host "gitea.hive-mcp.com/hive-agi"
              :workflow "release-gitea.yml"
-             :ci-dir   ".gitea/workflows"}})
+             :ci-dir   ".gitea/workflows"
+             :public?  false}})
+
+(def known-licenses
+  "Licences a LICENSE file is recognised as, in match order: the name written
+  into version.edn, its canonical URL, and text that identifies it."
+  [{:name "EPL-2.0" :url "https://www.eclipse.org/legal/epl-2.0/"
+    :markers ["SPDX-License-Identifier: EPL-2.0" "Eclipse Public License - v 2.0"
+              "Eclipse Public License - Version 2.0"]}
+   {:name "Apache-2.0" :url "https://www.apache.org/licenses/LICENSE-2.0"
+    :markers ["SPDX-License-Identifier: Apache-2.0" "Apache License" ]}
+   {:name "MIT" :url "https://opensource.org/licenses/MIT"
+    :markers ["SPDX-License-Identifier: MIT" "MIT License"
+              "Permission is hereby granted, free of charge"]}
+   {:name "Proprietary" :url "https://gitea.hive-mcp.com/hive-agi"
+    :markers ["Proprietary" "All rights reserved" "All Rights Reserved"]}])
+
+(defn license-from-text
+  "The known licence `license-file-text` (a ./LICENSE body) declares, or nil."
+  [license-file-text]
+  (when-not (str/blank? license-file-text)
+    (first (filter (fn [{:keys [markers]}]
+                     (some #(str/includes? license-file-text %) markers))
+                   known-licenses))))
+
+(defn resolve-license
+  "Pure. {:name :url} for the scaffold: an explicit `license` wins, else what
+  ./LICENSE declares. Never a default: throws :license/missing when there is no
+  licence to declare, :license/unrecognized when ./LICENSE names none we know,
+  and :license/url-missing for an explicit unknown licence without a URL."
+  [{:keys [license license-url license-file-text]}]
+  (cond
+    (seq license)
+    (let [url (or license-url
+                  (:url (first (filter #(= license (:name %)) known-licenses))))]
+      (when-not url
+        (throw (ex-info (str "--license " license " needs --license-url")
+                        {:reason :license/url-missing :license license})))
+      {:name license :url url})
+
+    (str/blank? license-file-text)
+    (throw (ex-info "no ./LICENSE and no --license: refusing to invent a licence"
+                    {:reason :license/missing}))
+
+    :else
+    (if-let [{:keys [name url]} (license-from-text license-file-text)]
+      {:name name :url url}
+      (throw (ex-info "./LICENSE names no licence bb-build recognises; pass --license and --license-url"
+                      {:reason :license/unrecognized})))))
+
+(defn refuse-non-public!
+  "Pure gate. A kind that publishes publicly (Clojars) requires the repo to be
+  public; `visibility` is the forge's answer (any case), nil when unknown.
+  Throws :visibility/not-public otherwise."
+  [kind-spec visibility]
+  (when (and (:public? kind-spec)
+             (not= "public" (some-> visibility str/lower-case)))
+    (throw (ex-info (str "refusing a public-registry scaffold for a repo whose visibility is "
+                         (or visibility "unknown") "; only public repos publish to Clojars")
+                    {:reason :visibility/not-public :visibility visibility}))))
 
 (defn- resource [path]
   (or (io/resource path)
@@ -75,17 +133,22 @@
   default group of io.github.<owner>; an explicit :group wins over both.
   Returns {:kind :group :version-edn {:path :content}
   :version-file {:path :content :keep-existing? true} :workflow {:path :content}
-  :build-alias str}. Throws on an unknown kind."
-  [{:keys [lib target kind minor license license-url src-dirs group scm-owner]
+  :build-alias str}. Throws on an unknown kind.
+  The licence comes from :license/:license-url or :license-file-text (the
+  target's ./LICENSE), never a default (see `resolve-license`); a public kind
+  requires :visibility \"public\" (see `refuse-non-public!`)."
+  [{:keys [lib target kind minor src-dirs group scm-owner visibility] :as opts
     :or   {minor 1}}]
   (let [k (or (get kinds kind)
               (throw (ex-info (str "unknown kind: " kind)
                               {:kind kind :known (vec (keys kinds))})))
+        _        (refuse-non-public! k visibility)
+        lic      (resolve-license opts)
         owner    (when (= :clojars kind) scm-owner)
         group    (or group (some-> owner owner-group) default-group)
         scm-host (if owner (str "github.com/" owner) (:scm-host k))
-        lic-name (or license (get-in k [:license :name]))
-        lic-url  (or license-url (get-in k [:license :url]))
+        lic-name (:name lic)
+        lic-url  (:url lic)
         src-dirs (or src-dirs (default-src-dirs target))
         subs {:lib lib :group group :minor minor
               :license-name lic-name :license-url lic-url

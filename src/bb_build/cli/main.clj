@@ -19,6 +19,7 @@
                  :coerce :keyword}
    :group       {:desc "Maven group (default: io.github.<owner> of a github origin, else io.github.hive-agi)"}
    :license     {:desc "override license name"}
+   :visibility  {:desc "repo visibility (public|private|internal); default: asked of `gh repo view`"}
    :license-url {:desc "override license url"}
    :force       {:desc "overwrite existing version.edn / workflow (never VERSION)" :coerce :boolean}
    :help        {:desc "show this help" :coerce :boolean}})
@@ -29,6 +30,20 @@
   (let [{:keys [out exit]} (p/sh {:dir (str target) :continue true}
                                  "git" "remote" "get-url" "origin")]
     (when (zero? exit) (str/trim out))))
+
+(defn- repo-visibility
+  "The forge's visibility for `target`'s repo, lower-cased, from
+  `gh repo view --json visibility`; nil when gh is absent or cannot tell.
+  nil is refused for a public kind, so an unknown never reads as public."
+  [target]
+  (try
+    (let [{:keys [out exit]} (p/sh {:dir (str target) :continue true}
+                                   "gh" "repo" "view" "--json" "visibility"
+                                   "--jq" ".visibility")]
+      (when (zero? exit)
+        (let [v (str/lower-case (str/trim out))]
+          (when-not (str/blank? v) v))))
+    (catch Exception _ nil)))
 
 (defn- detect-kind
   "clojars when origin is a github remote, else gitea. Defaults to clojars when
@@ -63,11 +78,21 @@
         (System/exit 3))
       (let [origin (origin-url target)
             kind (or (:kind opts) (detect-kind origin))
-            plan (scaffold/plan {:lib lib :target target :kind kind
-                                 :minor (:minor opts)
-                                 :group (:group opts)
-                                 :scm-owner (scaffold/github-owner origin)
-                                 :license (:license opts) :license-url (:license-url opts)})
+            license-file (fs/path target "LICENSE")
+            plan (try
+                   (scaffold/plan {:lib lib :target target :kind kind
+                                   :minor (:minor opts)
+                                   :group (:group opts)
+                                   :scm-owner (scaffold/github-owner origin)
+                                   :license (:license opts) :license-url (:license-url opts)
+                                   :license-file-text (when (fs/exists? license-file)
+                                                        (slurp (str license-file)))
+                                   :visibility (or (:visibility opts)
+                                                   (when (get-in scaffold/kinds [kind :public?])
+                                                     (repo-visibility target)))})
+                   (catch clojure.lang.ExceptionInfo e
+                     (println (str "REFUSED: " (ex-message e)))
+                     (System/exit 4)))
             results (scaffold/apply! plan (select-keys opts [:force]))]
         (println (str "Scaffolded " (:group plan) "/" lib " (" (name kind) ") into " target ":"))
         (doseq [{:keys [path status]} results]
